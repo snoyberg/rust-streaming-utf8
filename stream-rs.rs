@@ -5,45 +5,89 @@ use std::collections::HashMap;
 struct DecodeUtf8<I> {
     iter: I,
 }
+
+impl<I, E> DecodeUtf8<I>
+    where I: Iterator<Item=Result<u8, E>>,
+          E: Error {
+    fn pop(&mut self) -> Result<u8, Box<Error>> {
+        match self.iter.next() {
+            None => Err(From::from("Incomplete UTF8 codepoint")),
+            Some(Err(e)) => Err(From::from(e.to_string())), // FIXME Err(Box::new(e)),
+            Some(Ok(b)) => Ok(b),
+        }
+    }
+}
+
 impl<I, E> Iterator for DecodeUtf8<I>
     where I: Iterator<Item=Result<u8, E>>,
           E: Error {
     type Item = Result<char, Box<Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut buf: [u8; 4] = [0; 4];
-        let mut i = 0;
+        let b1 = match self.iter.next() {
+            None => {
+                return None;
+            },
+            Some(Err(e)) => {
+                return Some(Err(From::from(e.to_string()))); // FIXME to_string is a hack
+            },
+            Some(Ok(b)) => b,
+        };
 
-        loop {
-            match self.iter.next() {
-                None => {
-                    if i == 0 {
-                        return None;
-                    } else {
-                        return Some(Err(From::from("Invalid UTF-8 sequence"))); // FIXME more info format!("Invalid UTF-8 sequence: {:?}", buf[..i]))));
-                    }
-                },
-                Some(Err(e)) => {
-                    return Some(Err(From::from(e.to_string()))); // FIXME to_string is a hack
-                },
-                Some(Ok(b)) => {
-                    buf[i] = b;
-                    i += 1;
-                    match std::str::from_utf8(&buf[..i]) {
-                        Err(_) => (),
-                        Ok(str) => {
-                            match str.chars().next() {
-                                None => {
-                                    panic!("This does not make sense");
-                                },
-                                Some(c) => {
-                                    return Some(Ok(c));
-                                }
-                            }
-                        }
-                    }
+        if b1 & 0b10000000 == 0 { // ASCII
+            Some(Ok(unsafe { std::char::from_u32_unchecked(b1 as u32) }))
+        } else if b1 & 0b11100000 == 0b11000000 { // 2 bytes
+            let b2 = match self.pop() {
+                Err(e) => {
+                    return Some(Err(e));
                 }
-            }
+                Ok(b) => b,
+            };
+            let u: u32 = (((b1 & 0b00011111) as u32) << 6)
+                       | (((b2 & 0b00111111) as u32));
+            Some(Ok(unsafe { std::char::from_u32_unchecked(u) }))
+        } else if b1 & 0b11110000 == 0b11100000 { // 3 bytes
+            let b2 = match self.pop() {
+                Err(e) => {
+                    return Some(Err(e));
+                }
+                Ok(b) => b,
+            };
+            let b3 = match self.pop() {
+                Err(e) => {
+                    return Some(Err(e));
+                }
+                Ok(b) => b,
+            };
+            let u: u32 = (((b1 & 0b00001111) as u32) << 12)
+                       | (((b2 & 0b00111111) as u32) << 6)
+                       | (((b3 & 0b00111111) as u32));
+            Some(Ok(unsafe { std::char::from_u32_unchecked(u) }))
+        } else { // 4 bytes
+            assert!(b1 & 0b11111000 == 0b11110000);
+            let b2 = match self.pop() {
+                Err(e) => {
+                    return Some(Err(e));
+                }
+                Ok(b) => b,
+            };
+            let b3 = match self.pop() {
+                Err(e) => {
+                    return Some(Err(e));
+                }
+                Ok(b) => b,
+            };
+            let b4 = match self.pop() {
+                Err(e) => {
+                    return Some(Err(e));
+                }
+                Ok(b) => b,
+            };
+            let u: u32 = (((b1 & 0b00000111) as u32) << 18)
+                       | (((b2 & 0b00111111) as u32) << 12)
+                       | (((b3 & 0b00111111) as u32) << 6)
+                       | (((b4 & 0b00111111) as u32));
+            Some(Ok(unsafe { std::char::from_u32_unchecked(u) }))
         }
     }
 }
