@@ -67,7 +67,7 @@ impl<I, E> Iterator for EncodeUtf8<I>
         if self.index < 4 {
             let res = self.buf[self.index];
             self.index += 1;
-            if self.buf[self.index] == 0 {
+            if self.index < 4 && self.buf[self.index] == 0 {
                 self.index = 4;
             }
             Some(Ok(res))
