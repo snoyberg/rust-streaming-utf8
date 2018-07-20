@@ -57,7 +57,8 @@ impl<I, E> Iterator for DecodeUtf8<I>
             Some(Ok(b)) => b,
         };
 
-        if b1 & 0b1000_0000 == 0 { // ASCII
+        // cf. https://doc.rust-lang.org/src/core/char/methods.rs.html#884-886
+        if b1 <= 0x7F { // ASCII
             Some(Ok(unsafe { std::char::from_u32_unchecked(u32::from(b1)) }))
         } else if b1 & 0b1110_0000 == 0b1100_0000 { // 2 bytes
             let b2 = match self.pop() {
