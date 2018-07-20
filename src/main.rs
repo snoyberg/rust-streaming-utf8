@@ -1,9 +1,32 @@
-use std::io::{self, Read, Write};
-use std::error::Error;
 use std::collections::HashMap;
+use std::error::Error;
+use std::io::{self, Read, Write};
 
-struct DecodeUtf8<I> {
-    iter: I,
+fn main() -> Result<(), Box<Error>> {
+    let mapper: HashMap<char, char> =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".chars().zip(
+        "ДВСDЁҒGНІЈКLМПОРQЯЅТЦЏШХЧZавсdёfgніјкlмпорqгѕтцѵшхчz".chars())
+        .collect()
+        ;
+
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+
+    let byte_input = stdin.lock().bytes();
+    let text_input = decode_utf8(byte_input);
+    // https://rust-lang-nursery.github.io/rust-clippy/v0.0.212/index.html#clone_on_copy
+    let text_output =
+        text_input.map(|res| res.map(|c| *mapper.get(&c).unwrap_or(&c)));
+    //let text_output = "שלום עשח".chars().map(|c| (Ok(c) as Result<char, Box<Error>>)); // FIXME remove
+    let byte_output = encode_utf8(text_output);
+
+    connect(byte_output, stdout.lock())?;
+
+    Ok(())
+}
+
+pub struct DecodeUtf8<I> {
+    pub iter: I,
 }
 
 impl<I, E> DecodeUtf8<I>
@@ -34,19 +57,21 @@ impl<I, E> Iterator for DecodeUtf8<I>
             Some(Ok(b)) => b,
         };
 
-        if b1 & 0b10000000 == 0 { // ASCII
-            Some(Ok(unsafe { std::char::from_u32_unchecked(b1 as u32) }))
-        } else if b1 & 0b11100000 == 0b11000000 { // 2 bytes
+        // cf. https://doc.rust-lang.org/src/core/char/methods.rs.html#884-886
+        if b1 <= 0x7F { // ASCII
+            Some(Ok(unsafe { std::char::from_u32_unchecked(u32::from(b1)) }))
+        } else if b1 & 0b1110_0000 == 0b1100_0000 { // 2 bytes
             let b2 = match self.pop() {
                 Err(e) => {
                     return Some(Err(e));
                 }
                 Ok(b) => b,
             };
-            let u: u32 = (((b1 & 0b00011111) as u32) << 6)
-                       | (((b2 & 0b00111111) as u32));
+            // https://rust-lang-nursery.github.io/rust-clippy/v0.0.212/index.html#cast_lossless
+            let u: u32 = (u32::from(b1 & 0b0001_1111) << 6)
+                       |  u32::from(b2 & 0b0011_1111);
             Some(Ok(unsafe { std::char::from_u32_unchecked(u) }))
-        } else if b1 & 0b11110000 == 0b11100000 { // 3 bytes
+        } else if b1 & 0b1111_0000 == 0b1110_0000 { // 3 bytes
             let b2 = match self.pop() {
                 Err(e) => {
                     return Some(Err(e));
@@ -59,12 +84,12 @@ impl<I, E> Iterator for DecodeUtf8<I>
                 }
                 Ok(b) => b,
             };
-            let u: u32 = (((b1 & 0b00001111) as u32) << 12)
-                       | (((b2 & 0b00111111) as u32) << 6)
-                       | (((b3 & 0b00111111) as u32));
+            let u: u32 = (u32::from(b1 & 0b0000_1111) << 12)
+                       | (u32::from(b2 & 0b0011_1111) << 6)
+                       |  u32::from(b3 & 0b0011_1111);
             Some(Ok(unsafe { std::char::from_u32_unchecked(u) }))
         } else { // 4 bytes
-            assert!(b1 & 0b11111000 == 0b11110000);
+            assert!(b1 & 0b1111_1000 == 0b1111_0000);
             let b2 = match self.pop() {
                 Err(e) => {
                     return Some(Err(e));
@@ -83,26 +108,28 @@ impl<I, E> Iterator for DecodeUtf8<I>
                 }
                 Ok(b) => b,
             };
-            let u: u32 = (((b1 & 0b00000111) as u32) << 18)
-                       | (((b2 & 0b00111111) as u32) << 12)
-                       | (((b3 & 0b00111111) as u32) << 6)
-                       | (((b4 & 0b00111111) as u32));
+            // https://rust-lang-nursery.github.io/rust-clippy/v0.0.212/index.html#unreadable_literal
+            let u: u32 = u32::from(b1 & 0b0000_0111)
+                       | u32::from(b2 & 0b0011_1111)
+                       | u32::from(b3 & 0b0011_1111)
+                       | u32::from(b4 & 0b0011_1111);
             Some(Ok(unsafe { std::char::from_u32_unchecked(u) }))
         }
     }
 }
 
-fn decode_utf8<I>(iter: I) -> DecodeUtf8<I> {
+pub fn decode_utf8<I>(iter: I) -> DecodeUtf8<I> {
     DecodeUtf8 {
         iter
     }
 }
 
-struct EncodeUtf8<I> {
-    iter: I,
-    buf: [u8; 4],
-    index: usize,
+pub struct EncodeUtf8<I> {
+    pub iter: I,
+    pub buf: [u8; 4],
+    pub index: usize,
 }
+
 impl<I, E> Iterator for EncodeUtf8<I>
     where I: Iterator<Item=Result<char, E>> {
     type Item = Result<u8, E>;
@@ -134,7 +161,7 @@ impl<I, E> Iterator for EncodeUtf8<I>
     }
 }
 
-fn encode_utf8<I>(iter: I) -> EncodeUtf8<I> {
+pub fn encode_utf8<I>(iter: I) -> EncodeUtf8<I> {
     EncodeUtf8 {
         iter,
         buf: [0; 4],
@@ -142,28 +169,7 @@ fn encode_utf8<I>(iter: I) -> EncodeUtf8<I> {
     }
 }
 
-fn main() -> Result<(), Box<Error>> {
-    let mapper: HashMap<char, char> =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".chars().zip(
-        "ДВСDЁҒGНІЈКLМПОРQЯЅТЦЏШХЧZавсdёfgніјкlмпорqгѕтцѵшхчz".chars())
-        .collect()
-        ;
-
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-
-    let byte_input = stdin.lock().bytes();
-    let text_input = decode_utf8(byte_input);
-    let text_output = text_input.map(|res| res.map(|c| mapper.get(&c).unwrap_or(&c).clone()));
-    //let text_output = "שלום עשח".chars().map(|c| (Ok(c) as Result<char, Box<Error>>)); // FIXME remove
-    let byte_output = encode_utf8(text_output);
-
-    connect(byte_output, stdout.lock())?;
-
-    Ok(())
-}
-
-fn connect<I, W, E>(iter: I, mut hout: W) -> Result<(), E>
+pub fn connect<I, W, E>(iter: I, mut hout: W) -> Result<(), E>
     where I: Iterator<Item=Result<u8, E>>,
           W: Write,
           E: From<io::Error> {
@@ -175,7 +181,7 @@ fn connect<I, W, E>(iter: I, mut hout: W) -> Result<(), E>
     for next in iter {
         let b = next?;
         buf[i] = b;
-        i = i + 1;
+        i += 1;
 
         if i == SIZE {
             hout.write_all(&buf)?;
