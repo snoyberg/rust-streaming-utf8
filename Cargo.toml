@@ -1,0 +1,6 @@
+[package]
+name = "rust-streaming-utf8"
+version = "0.1.0"
+authors = ["Chris Allen <cma@bitemyapp.com>"]
+
+[dependencies]

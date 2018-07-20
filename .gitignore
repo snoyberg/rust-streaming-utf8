@@ -1,3 +1,6 @@
 output-hs.txt
 output-rs.txt
 stream-rs
+
+/target
+**/*.rs.bk
