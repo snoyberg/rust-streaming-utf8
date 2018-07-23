@@ -138,28 +138,9 @@ impl<I, T, E> EIterator for ResultIterator<I>
 }
 
 pub struct DecodeUtf8<I> {
-    pub iter: I,
-}
-
-impl<I, E> DecodeUtf8<I>
-    where I: EIterator<Item=u8, Error=E>,
-          E: Error {
-    fn pop(&mut self) -> Result<u8, Box<Error>> {
-        loop {
-            match self.iter.enext() {
-                Step::Done => {
-                    return Err(From::from("Incomplete UTF8 codepoint"));
-                }
-                Step::Error(e) => {
-                    return Err(From::from(e.to_string())); // FIXME Err(Box::new(e)),
-                }
-                Step::Skip => (),
-                Step::Yield(b) => {
-                    return Ok(b);
-                }
-            }
-        }
-    }
+    iter: I,
+    count: u8,
+    res: u32,
 }
 
 impl<I, E> EIterator for DecodeUtf8<I>
@@ -169,82 +150,58 @@ impl<I, E> EIterator for DecodeUtf8<I>
     type Error = Box<Error>;
 
     fn enext(&mut self) -> Step<Self::Item, Self::Error> {
-        let b1 = match self.iter.enext() {
+        let b = match self.iter.enext() {
             Step::Done => {
-                return Step::Done;
-            },
+                if self.count == 0 {
+                    return Step::Done;
+                } else {
+                    return Step::Error(From::from("Incomplete UTF8 codepoint"));
+                }
+            }
             Step::Error(e) => {
                 return Step::Error(From::from(e.to_string())); // FIXME to_string is a hack
-            },
+            }
             Step::Skip => {
                 return Step::Skip;
             }
             Step::Yield(b) => b,
         };
 
-        if b1 & 0b1000_0000 == 0 { // ASCII
-            Step::Yield(unsafe { std::char::from_u32_unchecked(u32::from(b1)) })
-        } else if b1 & 0b1110_0000 == 0b1100_0000 { // 2 bytes
-            let b2 = match self.pop() {
-                Err(e) => {
-                    return Step::Error(e);
-                }
-                Ok(b) => b,
-            };
-            // https://rust-lang-nursery.github.io/rust-clippy/v0.0.212/index.html#cast_lossless
-            let u: u32 = (u32::from(b1 & 0b0001_1111) << 6)
-                       |  u32::from(b2 & 0b0011_1111);
-            Step::Yield(unsafe { std::char::from_u32_unchecked(u) })
-        } else if b1 & 0b1111_0000 == 0b1110_0000 { // 3 bytes
-            let b2 = match self.pop() {
-                Err(e) => {
-                    return Step::Error(e);
-                }
-                Ok(b) => b,
-            };
-            let b3 = match self.pop() {
-                Err(e) => {
-                    return Step::Error(e);
-                }
-                Ok(b) => b,
-            };
-            let u: u32 = (u32::from(b1 & 0b0000_1111) << 12)
-                       | (u32::from(b2 & 0b0011_1111) << 6)
-                       |  u32::from(b3 & 0b0011_1111);
-            Step::Yield(unsafe { std::char::from_u32_unchecked(u) })
-        } else { // 4 bytes
-            assert!(b1 & 0b1111_1000 == 0b1111_0000);
-            let b2 = match self.pop() {
-                Err(e) => {
-                    return Step::Error(e);
-                }
-                Ok(b) => b,
-            };
-            let b3 = match self.pop() {
-                Err(e) => {
-                    return Step::Error(e);
-                }
-                Ok(b) => b,
-            };
-            let b4 = match self.pop() {
-                Err(e) => {
-                    return Step::Error(e);
-                }
-                Ok(b) => b,
-            };
-            // https://rust-lang-nursery.github.io/rust-clippy/v0.0.212/index.html#unreadable_literal
-            let u: u32 = u32::from(b1 & 0b0000_0111)
-                       | u32::from(b2 & 0b0011_1111)
-                       | u32::from(b3 & 0b0011_1111)
-                       | u32::from(b4 & 0b0011_1111);
-            Step::Yield(unsafe { std::char::from_u32_unchecked(u) })
+        if self.count == 0 {
+            if b & 0b1000_0000 == 0 { // ASCII
+                Step::Yield(unsafe { std::char::from_u32_unchecked(b.into()) })
+            } else {
+                self.count =
+                    if b & 0b1110_0000 == 0b1100_0000 { // 2 bytes
+                        self.res = u32::from(b & 0b0001_1111);
+                        1
+                    } else if b & 0b1111_0000 == 0b1110_0000 { // 3 bytes
+                        self.res = u32::from(b & 0b0000_1111);
+                        2
+                    } else { // 4 bytes
+                        assert!(b & 0b1111_1000 == 0b1111_0000);
+                        self.res = u32::from(b & 0b0000_0111);
+                        3
+                    };
+                Step::Skip
+            }
+        } else {
+            self.count -= 1;
+            self.res = (self.res << 6) | (u32::from(b) & 0b0011_1111);
+            if self.count == 0 {
+                Step::Yield(unsafe { std::char::from_u32_unchecked(self.res) })
+            } else {
+                Step::Skip
+            }
         }
     }
 }
 
 pub fn decode_utf8<I>(iter: I) -> DecodeUtf8<I> {
     DecodeUtf8 {
-        iter
+        iter,
+        count: 0,
+        res: 0,
     }
 }
 
