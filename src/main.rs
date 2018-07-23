@@ -38,6 +38,28 @@ pub trait EIterator {
 
     fn enext(&mut self) -> Step<Self::Item, Self::Error>;
 
+    fn step<F, B, E>(&mut self, mut f: F) -> Step<B, E>
+        where F: FnMut(Self::Item) -> Step<B, E>,
+              E: From<Self::Error> {
+        match self.enext() {
+            Step::Done => Step::Done,
+            Step::Error(e) => Step::Error(From::from(e)),
+            Step::Skip => Step::Skip,
+            Step::Yield(x) => f(x),
+        }
+    }
+
+    fn step_option<F, B, E>(&mut self, mut f: F) -> Step<B, E>
+        where F: FnMut(Option<Self::Item>) -> Step<B, E>,
+              E: From<Self::Error> {
+        match self.enext() {
+            Step::Done => f(None),
+            Step::Error(e) => Step::Error(From::from(e)),
+            Step::Skip => Step::Skip,
+            Step::Yield(x) => f(Some(x)),
+        }
+    }
+
     fn map<B, F>(self, f: F) -> Map<Self, F>
         where Self: Sized, F: FnMut(Self::Item) -> B {
         Map {
@@ -46,7 +68,7 @@ pub trait EIterator {
         }
     }
 
-    fn result_iter(self) -> ToResultIterator<Self>
+    fn iter(self) -> ToResultIterator<Self>
         where Self: Sized {
         ToResultIterator(self)
     }
@@ -63,12 +85,8 @@ impl<B, I: EIterator, F> EIterator for Map<I, F>
     type Error = I::Error;
 
     fn enext(&mut self) -> Step<Self::Item, Self::Error> {
-        match self.iter.enext() {
-            Step::Done => Step::Done,
-            Step::Error(e) => Step::Error(e),
-            Step::Skip => Step::Skip,
-            Step::Yield(x) => Step::Yield((self.func)(x)),
-        }
+        let f = &mut self.func;
+        self.iter.step(|x| Step::Yield(f(x)))
     }
 }
 
@@ -261,7 +279,7 @@ pub fn connect<I, W, E>(iter: I, mut hout: W) -> Result<(), E>
     let mut buf = [0; SIZE];
     let mut i = 0;
 
-    for next in iter.result_iter() {
+    for next in iter.iter() {
         let b = next?;
         buf[i] = b;
         i += 1;
