@@ -223,28 +223,6 @@ impl<I> Iterator for ToResultIterator<I>
     }
 }
 
-pub enum Void {
-    ImNotJokingPleaseNeverEverUseThisAtAll,
-}
-
-pub struct PlainIterator<I>(I);
-pub fn from_plain_iterator<I>(iter: I) -> PlainIterator<I> {
-    PlainIterator(iter)
-}
-impl<I> EIterator for PlainIterator<I>
-    where I: Iterator {
-
-    type Item = I::Item;
-    type Error = Void;
-
-    fn enext(&mut self) -> Step<Self::Item, Self::Error> {
-        match self.0.next() {
-            Some(x) => Step::Yield(x),
-            None => Step::Done,
-        }
-    }
-}
-
 pub struct ResultIterator<I>(I);
 impl<I, T, E> EIterator for ResultIterator<I>
     where I: Iterator<Item=Result<T, E>> {
