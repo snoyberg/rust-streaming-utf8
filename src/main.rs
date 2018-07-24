@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::io::{self, Read, Write};
 
-fn main() -> Result<(), Box<Error>> {
+fn main() -> Result<(), MyAppError> {
     let mapper: HashMap<char, char> =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".chars().zip(
         "ДВСDЁҒGНІЈКLМПОРQЯЅТЦЏШХЧZавсdёfgніјкlмпорqгѕтцѵшхчz".chars())
@@ -12,17 +12,51 @@ fn main() -> Result<(), Box<Error>> {
     let stdin = io::stdin();
     let stdout = io::stdout();
 
-    let byte_input = stdin.lock().bytes();
-    let text_input = decode_utf8(from_result_iterator(byte_input));
+    let byte_input = ResultIterator(stdin.lock().bytes()).map_error(MyAppError::IOError);
+    let text_input = byte_input.decode_utf8();
     // https://rust-lang-nursery.github.io/rust-clippy/v0.0.212/index.html#clone_on_copy
     let text_output =
-        text_input.map(|c| *mapper.get(&c).unwrap_or(&c));
+        EIterator::map(text_input, |c| *mapper.get(&c).unwrap_or(&c));
     //let text_output = "שלום עשח".chars().map(|c| (Ok(c) as Result<char, Box<Error>>)); // FIXME remove
-    let byte_output = encode_utf8(text_output);
+    let byte_output = text_output.encode_utf8();
 
-    connect(byte_output, stdout.lock())?;
+    let stdout_locked = stdout.lock();
+    byte_output.write_to(stdout_locked)
+}
 
-    Ok(())
+#[derive(Debug)]
+pub enum MyAppError {
+    IOError(std::io::Error),
+    DecodeUtf8Error(DecodeUtf8Error),
+}
+impl From<std::io::Error> for MyAppError {
+    fn from(e: std::io::Error) -> MyAppError {
+        MyAppError::IOError(e)
+    }
+}
+impl From<DecodeUtf8Error> for MyAppError {
+    fn from(e: DecodeUtf8Error) -> MyAppError {
+        MyAppError::DecodeUtf8Error(e)
+    }
+}
+impl std::fmt::Display for MyAppError {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            MyAppError::IOError(e) => e.fmt(fmt),
+            MyAppError::DecodeUtf8Error(e) => e.fmt(fmt),
+        }
+    }
+}
+impl Error for MyAppError {
+    fn description(&self) -> &str {
+        "MyAppError"
+    }
+    fn cause(&self) -> Option<&Error> {
+        match self {
+            MyAppError::IOError(e) => e.cause(),
+            MyAppError::DecodeUtf8Error(e) => e.cause(),
+        }
+    }
 }
 
 pub enum Step<T, E> {
@@ -60,12 +94,67 @@ pub trait EIterator {
         }
     }
 
+    fn from_result_iterator<I, T, E>(iter: I) -> ResultIterator<I> where I: Iterator<Item=Result<T, E>> {
+        ResultIterator(iter)
+    }
+
     fn map<B, F>(self, f: F) -> Map<Self, F>
         where Self: Sized, F: FnMut(Self::Item) -> B {
         Map {
             iter: self,
             func: f,
         }
+    }
+
+    fn map_error<E2, F>(self, f: F) -> MapError<Self, F>
+        where Self: Sized, F: FnMut(Self::Error) -> E2 {
+        MapError {
+            iter: self,
+            func: f,
+        }
+    }
+
+    fn decode_utf8(self) -> DecodeUtf8<Self> where Self: Sized {
+        DecodeUtf8 {
+            iter: self,
+            count: 0,
+            res: 0,
+        }
+    }
+
+    fn encode_utf8(self) -> EncodeUtf8<Self> where Self: Sized {
+        EncodeUtf8 {
+            iter: self,
+            buf: [0; 4],
+            index: 4,
+        }
+    }
+
+    fn write_to<W: Write>(self, mut hout: W) -> Result<(), Self::Error>
+        where Self: EIterator<Item=u8>,
+              Self: Sized,
+              Self::Error: From<io::Error> {
+
+        const SIZE: usize = 4096;
+        let mut buf = [0; SIZE];
+        let mut i: usize = 0;
+
+        for next in self.iter() {
+            let b = next?;
+            buf[i] = b;
+            i += 1;
+
+            if i == SIZE {
+                hout.write_all(&buf)?;
+                i = 0;
+            }
+        }
+
+        if i > 0 {
+            hout.write_all(&buf[..i])?;
+        }
+
+        Ok(())
     }
 
     fn iter(self) -> ToResultIterator<Self>
@@ -87,6 +176,26 @@ impl<B, I: EIterator, F> EIterator for Map<I, F>
     fn enext(&mut self) -> Step<Self::Item, Self::Error> {
         let f = &mut self.func;
         self.iter.step(|x| Step::Yield(f(x)))
+    }
+}
+
+pub struct MapError<I, F> {
+    iter: I,
+    func: F,
+}
+
+impl<E, I: EIterator, F> EIterator for MapError<I, F>
+    where F: FnMut(I::Error) -> E {
+    type Item = I::Item;
+    type Error = E;
+
+    fn enext(&mut self) -> Step<Self::Item, Self::Error> {
+        match self.iter.enext() {
+            Step::Done => Step::Done,
+            Step::Skip => Step::Skip,
+            Step::Error(e) => Step::Error((self.func)(e)),
+            Step::Yield(x) => Step::Yield(x),
+        }
     }
 }
 
@@ -137,9 +246,6 @@ impl<I> EIterator for PlainIterator<I>
 }
 
 pub struct ResultIterator<I>(I);
-pub fn from_result_iterator<I>(iter: I) -> ResultIterator<I> {
-    ResultIterator(iter)
-}
 impl<I, T, E> EIterator for ResultIterator<I>
     where I: Iterator<Item=Result<T, E>> {
 
@@ -161,11 +267,31 @@ pub struct DecodeUtf8<I> {
     res: u32,
 }
 
-impl<I, E> EIterator for DecodeUtf8<I>
-    where I: EIterator<Item=u8, Error=E>,
-          E: Error {
+#[derive(Debug)]
+pub enum DecodeUtf8Error {
+    InvalidUtf8Codepoint,
+}
+impl std::fmt::Display for DecodeUtf8Error {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            DecodeUtf8Error::InvalidUtf8Codepoint => {
+                write!(fmt, "Invalid UTF8 codepoint")
+            }
+        }
+    }
+}
+impl Error for DecodeUtf8Error {
+    fn description(&self) -> &str {
+        "UTF8 decode error"
+    }
+}
+
+impl<I> EIterator for DecodeUtf8<I>
+    where I: EIterator<Item=u8>,
+          I::Error: From<DecodeUtf8Error>,
+          I::Error: Error {
     type Item = char;
-    type Error = Box<Error>;
+    type Error = I::Error;
 
     fn enext(&mut self) -> Step<Self::Item, Self::Error> {
         let b = match self.iter.enext() {
@@ -173,11 +299,11 @@ impl<I, E> EIterator for DecodeUtf8<I>
                 if self.count == 0 {
                     return Step::Done;
                 } else {
-                    return Step::Error(From::from("Incomplete UTF8 codepoint"));
+                    return Step::Error(From::from(DecodeUtf8Error::InvalidUtf8Codepoint));
                 }
             }
             Step::Error(e) => {
-                return Step::Error(From::from(e.to_string())); // FIXME to_string is a hack
+                return Step::Error(e);
             }
             Step::Skip => {
                 return Step::Skip;
@@ -212,14 +338,6 @@ impl<I, E> EIterator for DecodeUtf8<I>
                 Step::Skip
             }
         }
-    }
-}
-
-pub fn decode_utf8<I>(iter: I) -> DecodeUtf8<I> {
-    DecodeUtf8 {
-        iter,
-        count: 0,
-        res: 0,
     }
 }
 
@@ -260,39 +378,4 @@ impl<I, E> EIterator for EncodeUtf8<I>
             }
         }
     }
-}
-
-pub fn encode_utf8<I>(iter: I) -> EncodeUtf8<I> {
-    EncodeUtf8 {
-        iter,
-        buf: [0; 4],
-        index: 4,
-    }
-}
-
-pub fn connect<I, W, E>(iter: I, mut hout: W) -> Result<(), E>
-    where I: EIterator<Item=u8, Error=E>,
-          W: Write,
-          E: From<io::Error> {
-
-    const SIZE: usize = 4096;
-    let mut buf = [0; SIZE];
-    let mut i = 0;
-
-    for next in iter.iter() {
-        let b = next?;
-        buf[i] = b;
-        i += 1;
-
-        if i == SIZE {
-            hout.write_all(&buf)?;
-            i = 0;
-        }
-    }
-
-    if i > 0 {
-        hout.write_all(&buf[..i])?;
-    }
-
-    Ok(())
 }
