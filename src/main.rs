@@ -117,7 +117,10 @@ pub trait EIterator {
         self.map_error(From::from)
     }
 
-    fn decode_utf8(self) -> DecodeUtf8<Self> where Self: Sized {
+    fn decode_utf8(self) -> DecodeUtf8<Self>
+        where Self: Sized,
+              Self: EIterator<Item=u8>,
+              Self::Error: From<DecodeUtf8Error> {
         DecodeUtf8 {
             iter: self,
             count: 0,
@@ -125,7 +128,9 @@ pub trait EIterator {
         }
     }
 
-    fn encode_utf8(self) -> EncodeUtf8<Self> where Self: Sized {
+    fn encode_utf8(self) -> EncodeUtf8<Self>
+        where Self: Sized,
+              Self: EIterator<Item=char> {
         EncodeUtf8 {
             iter: self,
             buf: [0; 4],
@@ -279,8 +284,7 @@ impl Error for DecodeUtf8Error {
 
 impl<I> EIterator for DecodeUtf8<I>
     where I: EIterator<Item=u8>,
-          I::Error: From<DecodeUtf8Error>,
-          I::Error: Error {
+          I::Error: From<DecodeUtf8Error> {
     type Item = char;
     type Error = I::Error;
 
