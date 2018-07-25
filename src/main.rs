@@ -12,7 +12,7 @@ fn main() -> Result<(), MyAppError> {
     let stdin = io::stdin();
     let stdout = io::stdout();
 
-    let byte_input = ResultIterator(stdin.lock().bytes()).map_error(MyAppError::IOError);
+    let byte_input = ResultIterator(stdin.lock().bytes()).map_error_from();
     let text_input = byte_input.decode_utf8();
     // https://rust-lang-nursery.github.io/rust-clippy/v0.0.212/index.html#clone_on_copy
     let text_output =
@@ -112,6 +112,12 @@ pub trait EIterator {
             iter: self,
             func: f,
         }
+    }
+
+    fn map_error_from<E2>(self) -> MapError<Self, fn(Self::Error) -> E2>
+        where Self: Sized,
+              E2: From<Self::Error> {
+        self.map_error(From::from)
     }
 
     fn decode_utf8(self) -> DecodeUtf8<Self> where Self: Sized {
