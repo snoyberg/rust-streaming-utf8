@@ -8,6 +8,7 @@ fn main() -> Result<(), MyAppError> {
         "ДВСDЁҒGНІЈКLМПОРQЯЅТЦЏШХЧZавсdёfgніјкlмпорqгѕтцѵшхчz".chars())
         .collect()
         ;
+    let convert_char = |c| *mapper.get(&c).unwrap_or(&c);
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -18,7 +19,7 @@ fn main() -> Result<(), MyAppError> {
         .eiter()
         .map_error(MyAppError::IOError)
         .decode_utf8()
-        .map(|c| *mapper.get(&c).unwrap_or(&c))
+        .map(convert_char)
         .encode_utf8()
         .write_to(stdout.lock())?;
 
