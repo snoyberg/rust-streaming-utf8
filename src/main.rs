@@ -372,9 +372,9 @@ where
 }
 
 pub struct EncodeUtf8<I> {
-    pub iter: I,
-    pub buf: [u8; 4],
-    pub index: usize,
+    iter: I,
+    buf: [u8; 4],
+    index: usize,
 }
 
 impl<I, E> EIterator for EncodeUtf8<I>
