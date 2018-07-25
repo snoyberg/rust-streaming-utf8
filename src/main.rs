@@ -12,16 +12,17 @@ fn main() -> Result<(), MyAppError> {
     let stdin = io::stdin();
     let stdout = io::stdout();
 
-    let byte_input = ResultIterator(stdin.lock().bytes()).map_error_from();
-    let text_input = byte_input.decode_utf8();
-    // https://rust-lang-nursery.github.io/rust-clippy/v0.0.212/index.html#clone_on_copy
-    let text_output =
-        EIterator::map(text_input, |c| *mapper.get(&c).unwrap_or(&c));
-    //let text_output = "שלום עשח".chars().map(|c| (Ok(c) as Result<char, Box<Error>>)); // FIXME remove
-    let byte_output = text_output.encode_utf8();
+    stdin
+        .lock()
+        .bytes()
+        .eiter()
+        .map_error(MyAppError::IOError)
+        .decode_utf8()
+        .map(|c| *mapper.get(&c).unwrap_or(&c))
+        .encode_utf8()
+        .write_to(stdout.lock())?;
 
-    let stdout_locked = stdout.lock();
-    byte_output.write_to(stdout_locked)
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -94,10 +95,6 @@ pub trait EIterator {
         }
     }
 
-    fn from_result_iterator<I, T, E>(iter: I) -> ResultIterator<I> where I: Iterator<Item=Result<T, E>> {
-        ResultIterator(iter)
-    }
-
     fn map<B, F>(self, f: F) -> Map<Self, F>
         where Self: Sized, F: FnMut(Self::Item) -> B {
         Map {
@@ -167,6 +164,16 @@ pub trait EIterator {
         where Self: Sized {
         ToResultIterator(self)
     }
+}
+
+pub trait ToEIter where Self: Sized {
+    fn eiter(self) -> ResultIterator<Self> {
+        ResultIterator(self)
+    }
+}
+
+impl<I, T, E> ToEIter for I
+    where I: Iterator<Item=Result<T, E>> {
 }
 
 pub struct Map<I, F> {
